@@ -77,7 +77,7 @@ Parameters:
     Description: Bid price for the worker spot nodes. This is only applicable when Market = SPOT. Specify 0 for Market = ON_DEMAND.
   AccessFromCIDRBlock:
     Type: String
-    MinLength: 9
+    Default: 10.0.0.0/19
     Description: Restrict WebUI access to specified address or range
   AmiId:
     Type: String
@@ -104,6 +104,8 @@ Conditions:
   IamPolicyEmpty: !Equals [!Ref IamPolicyDocument, '{}']
   IsOnDemandCondition: !Equals [!Ref Market, ON_DEMAND]
   EgressStoreIamPolicyEmpty: !Equals [!Ref EgressStoreIamPolicyDocument, '{}']
+  AppStreamEnabled: !Equals [!Ref IsAppStreamEnabled, 'true']
+
 
 Resources:
   # TODO: Use one bucket for EMR logs per account, so shift deployment to account on-boarding and pass here as param
@@ -148,11 +150,13 @@ Resources:
       VpcId:
         Ref: VPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 8192
-          ToPort: 8192
-          CidrIp:
-            Ref: AccessFromCIDRBlock
+        - !If
+          - AppStreamEnabled
+          - !Ref 'AWS::NoValue'
+          - IpProtocol: tcp
+            FromPort: 8192
+            ToPort: 8192
+            CidrIp: !Ref AccessFromCIDRBlock
 
   InstanceProfile:
     Properties:
@@ -214,6 +218,11 @@ Resources:
               - Effect: 'Allow'
                 Action: 's3:GetObject'
                 Resource:
+                  - !Sub 'arn:aws:s3:::packages.${AWS::Region}.amazonaws.com/*'
+                  - !Sub 'arn:aws:s3:::repo.${AWS::Region}.amazonaws.com/*'
+                  - !Sub 'arn:aws:s3:::repo.${AWS::Region}.emr.amazonaws.com/*'
+                  - !Sub 'arn:aws:s3:::amazonlinux.${AWS::Region}.amazonaws.com/*'
+                  - !Sub 'arn:aws:s3:::amazonlinux-2-repos-${AWS::Region}/*'
                   - !Sub 'arn:aws:s3:::${AWS::Region}.elasticmapreduce/bootstrap-actions/run-if'
                   - 'arn:aws:s3:::elasticmapreduce/bootstrap-actions/log4j/patch-log4j-emr-5.27.1-v1.sh'
                   - !Sub
@@ -281,22 +290,6 @@ Resources:
         - Name: Hadoop
         - Name: Hive
         - Name: Spark
-      BootstrapActions:
-        - Name: Run-Python-Jupyter
-          ScriptBootstrapAction:
-            Path: !Sub 's3://${AWS::Region}.elasticmapreduce/bootstrap-actions/run-if'
-            Args:
-              - 'instance.isMaster=true'
-              - '/opt/hail-on-AWS-spot-instances/src/jupyter_run.sh'
-        - Name: Mount-S3-Resources
-          ScriptBootstrapAction:
-            Path: !Sub '${EnvironmentInstanceFiles}/get_bootstrap.sh'
-            Args:
-              - !Ref EnvironmentInstanceFiles
-              - !Ref S3Mounts
-        - Name: Patch-Log-4j
-          ScriptBootstrapAction:
-            Path: 's3://elasticmapreduce/bootstrap-actions/log4j/patch-log4j-emr-5.27.1-v1.sh'
       CustomAmiId:
         Ref: AmiId
       Configurations:
@@ -321,6 +314,10 @@ Resources:
           - Fn::GetAtt:
               - MasterSecurityGroup
               - GroupId
+          - !If
+            - AppStreamEnabled
+            - Fn::ImportValue: !Sub "${SolutionNamespace}-WorkspaceSG"
+            - !Ref "AWS::NoValue"
         Ec2KeyName:
           Ref: KeyName
         Ec2SubnetId:
